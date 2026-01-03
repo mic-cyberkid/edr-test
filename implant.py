@@ -47,12 +47,6 @@ shell_output_queue = queue.Queue()
 MAX_CHUNK_SIZE = 1024 * 1024 
 MAX_PENDING_RESULTS = 25 
 
-# Derive persistent per-implant base key from hardware ID (never changes)
-def derive_implant_key():
-    base = implant_id.encode('utf-8')  # Already unique from MachineGuid/UUID
-    return hashlib.sha256(base + b"LOCUST_IMP_KEY").digest()  # 32-byte key
-
-IMPLANT_BASE_KEY = derive_implant_key()
 
 # Ephemeral session key (refreshed periodically)
 session_key = None
@@ -716,3 +710,4 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
