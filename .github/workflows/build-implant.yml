@@ -41,11 +41,7 @@ jobs:
             --collect-all keyboard `
             implant.py
 
-      - name: Check binary size
-        id: size_check
-        shell: pwsh
-        run: |
-         dist/implant.exe
+      
 
 
       - name: Upload artifact
