@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller==6.10.0  # Pin a known-good version
-          pip install requests cryptography mss opencv-python pyaudio keyboard pywin32 wmi pillow
+          pip install requests cryptography mss opencv-python PyAudio keyboard pywin32 wmi pillow
 
       - name: Build with PyInstaller
         run: |
