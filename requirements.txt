@@ -7,4 +7,4 @@ pywin32
 wmi
 pillow
 pycryptodomex
-pyaudio
+PyAudio
