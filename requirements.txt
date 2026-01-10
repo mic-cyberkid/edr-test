@@ -1,0 +1,10 @@
+requests
+cryptography
+mss
+opencv-python
+keyboard
+pywin32
+wmi
+pillow
+pycryptodomex
+pyaudio
