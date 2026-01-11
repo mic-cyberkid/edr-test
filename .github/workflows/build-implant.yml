@@ -25,6 +25,10 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
+          python implant.py
+          
+      - name: Build with PyInstaller
+        run: |
           pyinstaller --onefile --noconsole `
             --name implant `
             --add-data "implant.py;." `
